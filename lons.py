@@ -1,261 +1,173 @@
-import pygame
-import math
-import random
-import sys
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from PIL import Image
 
-pygame.init()
+# Load your map image (replace 'london_sector_map.png' with your actual file)
+map_image_path = 'london_sector_map.png'
+img = Image.open(map_image_path)
 
-# Screen setup
-WIDTH, HEIGHT = 1200, 800
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Euroscope-style ATC - London Control South Sector")
+# Convert to array for plotting
+img_array = np.array(img)
 
-# Colors and fonts
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-BLUE = (0, 0, 255)
-GREEN = (0, 255, 0)
-RED = (255, 0, 0)
-YELLOW = (255, 255, 0)
-font = pygame.font.SysFont("Arial", 14)
+# Define the sector boundary points (based on the red line in your map)
+sector_boundary_points = np.array([
+    [215, 115],
+    [305, 165],
+    [305, 245],
+    [215, 305],
+    [165, 245],
+    [165, 165],
+    [215, 115],
+    [265, 135],
+    [285, 195],
+    [265, 265],
+    [195, 215],
+    [135, 195],
+    [115, 135],
+    [135, 75],
+    [195, 55],
+    [265, 75],
+    [285, 115],
+    [265, 155],
+    [215, 135],
+    [165, 115],
+    [115, 75],
+    [135, 35],
+    [195, 15],
+    [265, 35],
+    [285, 75],
+    [265, 115],
+    [215, 115]
+])
 
-# Load background map (placeholder: plain background)
-# Replace with actual map image path if available
-# background_img = pygame.image.load("sector_map.png")
+# Normalize sector points to match the image scale (assuming your image size)
+# Adjust this scaling if needed
+scale_x = 1
+scale_y = 1
+sector_coords = sector_boundary_points * [scale_x, scale_y]
 
-# Aircraft class with routing & waypoints
+# VOR stations (example positions, adjust as needed)
+VORs = {
+    'LON': (200, 50),
+    'SOU': (400, 300),
+    'NORTH': (50, 250)
+}
+
+# Aircraft class with waypoints
 class Aircraft:
-    def __init__(self, id, x, y, altitude=30000, heading=0, speed=3):
+    def __init__(self, id, x, y, heading=0, speed=1):
         self.id = id
         self.x = x
         self.y = y
-        self.altitude = altitude
         self.heading = heading
         self.speed = speed
-        self.waypoints = []  # list of (x, y)
-        self.selected = False
-        self.message_log = []
+        self.waypoints = []
 
     def set_route(self, waypoints):
         self.waypoints = waypoints
 
-    def update_position(self):
+    def update(self):
         if self.waypoints:
             target_x, target_y = self.waypoints[0]
             dx = target_x - self.x
             dy = target_y - self.y
-            distance = math.hypot(dx, dy)
-            if distance < self.speed:
+            dist = np.hypot(dx, dy)
+            if dist < self.speed:
                 self.x, self.y = target_x, target_y
                 self.waypoints.pop(0)
             else:
-                self.heading = math.degrees(math.atan2(dy, dx))
-                rad = math.radians(self.heading)
-                self.x += self.speed * math.cos(rad)
-                self.y += self.speed * math.sin(rad)
+                self.heading = np.degrees(np.arctan2(dy, dx))
+                rad = np.radians(self.heading)
+                self.x += self.speed * np.cos(rad)
+                self.y += self.speed * np.sin(rad)
         else:
-            # Continue current heading
-            rad = math.radians(self.heading)
-            self.x += self.speed * math.cos(rad)
-            self.y += self.speed * math.sin(rad)
+            rad = np.radians(self.heading)
+            self.x += self.speed * np.cos(rad)
+            self.y += self.speed * np.sin(rad)
 
-        # Wrap around
-        self.x %= WIDTH
-        self.y %= HEIGHT
+        # Keep aircraft within map bounds
+        self.x = np.clip(self.x, 0, img.size[0])
+        self.y = np.clip(self.y, 0, img.size[1])
 
-    def draw(self, surface):
-        color = GREEN if self.selected else BLUE
-        pygame.draw.circle(surface, color, (int(self.x), int(self.y)), 8)
-        # Heading indicator
-        end_x = self.x + 15 * math.cos(math.radians(self.heading))
-        end_y = self.y + 15 * math.sin(math.radians(self.heading))
-        pygame.draw.line(surface, WHITE, (self.x, self.y), (end_x, end_y), 2)
-        # Show info if selected
-        if self.selected:
-            info = f"AC {self.id} | Alt: {self.altitude} ft | HDG: {int(self.heading)}°"
-            surface.blit(font.render(info, True, WHITE), (self.x + 10, self.y - 20))
+    def draw(self, ax):
+        ax.plot(self.x, self.y, 'bo')
+        for wp in self.waypoints:
+            ax.plot(wp[0], wp[1], 'go')
+        if self.waypoints:
+            xs = [self.x] + [wp[0] for wp in self.waypoints]
+            ys = [self.y] + [wp[1] for wp in self.waypoints]
+            ax.plot(xs, ys, 'g--')
 
-# Message Log System
-class MessageLog:
-    def __init__(self):
-        self.messages = []
+# Generate some aircraft with routes
+aircrafts = []
+for i in range(5):
+    x = np.random.uniform(100, img.size[0]-100)
+    y = np.random.uniform(100, img.size[1]-100)
+    ac = Aircraft(i, x, y, heading=np.random.uniform(0, 360))
+    route = [
+        (np.random.uniform(50, img.size[0]-50), np.random.uniform(50, img.size[1]-50)),
+        (np.random.uniform(50, img.size[0]-50), np.random.uniform(50, img.size[1]-50))
+    ]
+    ac.set_route(route)
+    aircrafts.append(ac)
 
-    def add_message(self, sender, text):
-        self.messages.append(f"{sender}: {text}")
-        if len(self.messages) > 20:
-            self.messages.pop(0)
+# Set up plot
+fig, ax = plt.subplots(figsize=(10, 8))
+ax.imshow(img_array, extent=[0, img.size[0], 0, img.size[1]])
+ax.set_xlim(0, img.size[0])
+ax.set_ylim(0, img.size[1])
+ax.set_title("London South Sector Radar")
+ax.set_xlabel("Pixels")
+ax.set_ylabel("Pixels")
+ax.grid(False)
 
-    def draw(self, surface):
-        box = pygame.Rect(10, HEIGHT - 210, 400, 200)
-        pygame.draw.rect(surface, BLACK, box)
-        pygame.draw.rect(surface, WHITE, box, 2)
-        for i, msg in enumerate(self.messages):
-            msg_surf = font.render(msg, True, WHITE)
-            surface.blit(msg_surf, (20, HEIGHT - 200 + i * 10))
+# Draw sector boundary in red
+boundary_line, = ax.plot(sector_coords[:,0], sector_coords[:,1], 'r-', linewidth=2)
 
-# Conflict detection
-def detect_conflicts(aircrafts):
-    conflicts = []
-    for i in range(len(aircrafts)):
-        for j in range(i+1, len(aircrafts)):
-            ac1 = aircrafts[i]
-            ac2 = aircrafts[j]
-            dist = math.hypot(ac1.x - ac2.x, ac1.y - ac2.y)
-            alt_diff = abs(ac1.altitude - ac2.altitude)
-            if dist < 50 and alt_diff < 1000:
-                conflicts.append((ac1, ac2))
-    return conflicts
+# Draw VOR stations
+for name, pos in VORs.items():
+    ax.plot(pos[0], pos[1], 'r^')
+    ax.text(pos[0]+5, pos[1]+5, name, color='red')
 
-def handle_conflicts(conflicts, message_log):
-    for ac1, ac2 in conflicts:
-        message_log.add_message("Conflict", f"AC {ac1.id} & AC {ac2.id} conflict!")
-        # Optional: instruct aircraft to climb or turn
+# Radar sweep line
+sweep_line, = ax.plot([0, 0], [0, img.size[1]], color='green', linewidth=2, alpha=0.7)
 
-# Process user commands
-def process_command(ac, command):
-    parts = command.lower().split()
-    if not parts:
-        return
-    if parts[0] == "alt":
-        try:
-            ac.altitude = int(parts[1])
-        except:
-            pass
-    elif parts[0] in ("h", "heading"):
-        try:
-            ac.heading = int(parts[1]) % 360
-        except:
-            pass
-    elif parts[0] == "speed":
-        try:
-            ac.speed = int(parts[1])
-        except:
-            pass
-    elif parts[0] == "route":
-        waypoints = []
-        for wp in parts[1:]:
-            try:
-                x_str, y_str = wp.split(',')
-                x, y = int(x_str), int(y_str)
-                waypoints.append((x, y))
-            except:
-                continue
-        ac.set_route(waypoints)
-    elif parts[0] == "hold":
-        # Implement hold pattern (hold at current position)
-        ac.set_route([(ac.x, ac.y)] * 3)  # simple hold
-    elif parts[0] == "clear":
-        ac.waypoints = []
-
-# Utility to get aircraft at position
-def get_aircraft_at_pos(pos):
-    for ac in aircraft_list:
-        dist = math.hypot(ac.x - pos[0], ac.y - pos[1])
-        if dist < 10:
-            return ac
-    return None
-
-# Initialize aircraft list
-aircraft_list = []
-for i in range(10):
-    x = random.randint(100, WIDTH - 100)
-    y = random.randint(100, HEIGHT - 100)
-    heading = random.randint(0, 359)
-    aircraft_list.append(Aircraft(i, x, y, heading=heading))
-
-# Initialize message log
-message_log = MessageLog()
-
-# Command input variables
-selected_aircraft = None
-command_mode = False
-command_text = ""
-
-# Load sound for alerts
-try:
-    alert_sound = pygame.mixer.Sound("alert.wav")
-except:
-    alert_sound = None
-
-# Main loop
-clock = pygame.time.Clock()
-running = True
-
-while running:
-    clock.tick(60)
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-            ac = get_aircraft_at_pos(pygame.mouse.get_pos())
-            if ac:
-                if selected_aircraft:
-                    selected_aircraft.selected = False
-                ac.selected = True
-                selected_aircraft = ac
-
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_c:
-                command_mode = True
-                command_text = ""
-            elif command_mode:
-                if event.key == pygame.K_RETURN:
-                    if selected_aircraft:
-                        process_command(selected_aircraft, command_text)
-                        message_log.add_message("ATC", f"Command: {command_text}")
-                    command_mode = False
-                elif event.key == pygame.K_BACKSPACE:
-                    command_text = command_text[:-1]
-                else:
-                    command_text += event.unicode
-            elif event.key == pygame.K_SPACE:
-                # Optional: add random commands or toggle features
-                pass
-
+# Animation update
+def update(frame):
     # Update aircraft positions
-    for ac in aircraft_list:
-        ac.update_position()
+    for ac in aircrafts:
+        ac.update()
 
-    # Detect conflicts
-    conflicts = detect_conflicts(aircraft_list)
-    if conflicts and alert_sound:
-        alert_sound.play()
-    handle_conflicts(conflicts, message_log)
+    # Update sweep line angle
+    angle = frame % 360
+    rad_angle = np.radians(angle)
+    x_end = img.size[0] * np.cos(rad_angle)
+    y_end = img.size[1] * np.sin(rad_angle)
+    sweep_line.set_data([img.size[0]/2, x_end], [img.size[1]/2, y_end])
 
-    # Draw everything
-    screen.fill(BLACK)
-    # If you have a map, blit it here
-    # screen.blit(background_img, (0,0))
-    # Draw sector boundary
-    pygame.draw.rect(screen, WHITE, (50, 50, WIDTH - 100, HEIGHT - 100), 2)
+    # Clear previous aircraft plots
+    # Remove previous scatter plots
+    [coll.remove() for coll in ax.collections]
+    # Plot aircraft
+    for ac in aircrafts:
+        ac.draw(ax)
 
-    for ac in aircraft_list:
-        ac.draw(screen)
+    # Detect aircraft in sweep
+    detected_x = []
+    detected_y = []
+    for ac in aircrafts:
+        dx = ac.x - img.size[0]/2
+        dy = ac.y - img.size[1]/2
+        ac_angle = np.degrees(np.arctan2(dy, dx))
+        ac_angle = ac_angle % 360
+        if abs(ac_angle - angle) < 2:
+            detected_x.append(ac.x)
+            detected_y.append(ac.y)
+    # Plot detected aircraft
+    scatter = ax.scatter(detected_x, detected_y, c='red', s=50)
 
-    # Draw message log
-    message_log.draw(screen)
+    return sweep_line, scatter
 
-    # Draw command input box
-    if command_mode:
-        input_box = pygame.Rect(20, HEIGHT - 40, 400, 30)
-        pygame.draw.rect(screen, WHITE, input_box)
-        txt_surface = font.render(command_text, True, BLACK)
-        screen.blit(txt_surface, (input_box.x + 5, input_box.y + 5))
-        instruction_text = "Enter command (alt, heading, speed, route x,y ...):"
-        instruction_surf = font.render(instruction_text, True, WHITE)
-        screen.blit(instruction_surf, (20, HEIGHT - 60))
-    else:
-        info_text = "Press 'C' to enter command mode | SPACE for random commands"
-        info_surf = font.render(info_text, True, WHITE)
-        screen.blit(info_surf, (20, HEIGHT - 40))
-
-    # Optional: display selected aircraft info
-    if selected_aircraft:
-        info_str = f"Selected AC {selected_aircraft.id} | Alt: {selected_aircraft.altitude} ft | HDG: {int(selected_aircraft.heading)}° | SPD: {selected_aircraft.speed}"
-        info_surf = font.render(info_str, True, WHITE)
-        screen.blit(info_surf, (650, HEIGHT - 40))
-
-    pygame.display.flip()
-
-pygame.quit()
+ani = animation.FuncAnimation(fig, update, frames=range(0, 360, 2), interval=50, blit=False)
+plt.show()
